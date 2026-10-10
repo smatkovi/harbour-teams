@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Teams
+Comment=Microsoft Teams Client
+Icon=/usr/share/icons/hicolor/80x80/apps/teams.png
+Exec=/opt/teams/teams
+Terminal=false
+Categories=Network;InstantMessaging;
+X-Maemo-Orientation=Automatic

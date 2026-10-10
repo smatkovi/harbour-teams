@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Teams
+Comment=Microsoft Teams client
+Icon=harbour-teams
+Exec=sailfish-qml harbour-teams
+Categories=Network;InstantMessaging;
+X-Nemo-Application-Type=silica-qt5
+
+[X-Sailjail]
+Permissions=Internet;UserDirs;Secrets;
+OrganizationName=harbour-teams
+ApplicationName=harbour-teams

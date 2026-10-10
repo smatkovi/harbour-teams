@@ -1,0 +1,6 @@
+# Keine Muster mit build*: die fressen auch build-deb.sh.
+/meego/stage/
+*.deb
+*.rpm
+__pycache__/
+*.pyc

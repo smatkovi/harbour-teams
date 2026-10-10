@@ -1,0 +1,527 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+"""
+Teams Client for MeeGo Harmattan
+Version 0.9.6 - API call queue
+"""
+
+import sys
+import os
+import json
+import subprocess
+from collections import deque
+
+reload(sys)
+sys.setdefaultencoding('utf-8')
+
+from PySide.QtCore import QObject, QUrl, Slot, Signal, Property, QThread, QTimer
+from PySide.QtGui import QApplication
+from PySide.QtDeclarative import QDeclarativeView
+
+APP_DIR = "/opt/teams"
+PYTHON3 = "/opt/wunderw/bin/python3.11"
+API_SCRIPT = os.path.join(APP_DIR, "teams_api.py")
+
+
+class APIWorker(QThread):
+    """Background thread for API calls."""
+    
+    finished = Signal()
+    
+    def __init__(self, parent=None):
+        super(APIWorker, self).__init__(parent)
+        self.command = ""
+        self.args = {}
+        self.result = {}
+    
+    def setup(self, command, args=None):
+        self.command = command
+        self.args = args or {}
+        self.result = {}
+    
+    def run(self):
+        try:
+            request = json.dumps({
+                "command": self.command,
+                "args": self.args
+            })
+            
+            proc = subprocess.Popen(
+                [PYTHON3, API_SCRIPT],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            stdout, stderr = proc.communicate(request)
+            
+            if stderr:
+                print u"API stderr:", stderr
+            
+            if stdout:
+                self.result = json.loads(stdout.strip())
+            else:
+                self.result = {"error": "No response"}
+                
+        except Exception as e:
+            print u"APIWorker error:", e
+            self.result = {"error": str(e)}
+        
+        self.finished.emit()
+
+
+class TeamsAPI(QObject):
+    """Bridge between QML and Python 3.11 API."""
+    
+    # Signals (no parameters - data via properties)
+    authReady = Signal()
+    deviceCodeReady = Signal()
+    loginReady = Signal()
+    conversationsReady = Signal()
+    messagesReady = Signal()
+    messageSentReady = Signal()
+    avatarReady = Signal()
+    searchReady = Signal()
+    chatCreated = Signal()
+    downloadReady = Signal()
+    dirListReady = Signal()
+    errorOccurred = Signal()
+    
+    # Property change signals
+    authDataChanged = Signal()
+    deviceCodeDataChanged = Signal()
+    conversationsDataChanged = Signal()
+    messagesDataChanged = Signal()
+    searchDataChanged = Signal()
+    avatarDataChanged = Signal()
+    downloadDataChanged = Signal()
+    errorDataChanged = Signal()
+    
+    def __init__(self, parent=None):
+        super(TeamsAPI, self).__init__(parent)
+        
+        # State
+        self._authenticated = False
+        self._display_name = u""
+        self._my_mri = u""
+        self._user_code = u""
+        self._verification_url = u""
+        self._device_code = u""
+        self._conversations = u"[]"
+        self._messages = u"[]"
+        self._search_results = u"[]"
+        self._avatar_mri = u""
+        self._avatar_path = u""
+        self._error_message = u""
+        self._current_conv_id = u""
+        self._created_chat_id = u""
+        self._send_success = False
+        self._download_path = u""
+        self._download_success = False
+        self._dir_list = u"[]"
+        self._dir_path = u""
+        
+        # Worker thread and queue
+        self._worker = APIWorker(self)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._pending_callback = None
+        self._queue = deque()
+        self._processing = False
+        
+        print u"TeamsAPI initialized"
+    
+    # ==================== Properties ====================
+    
+    def _get_authenticated(self):
+        return self._authenticated
+    authenticated = Property(bool, _get_authenticated, notify=authDataChanged)
+    
+    def _get_display_name(self):
+        return self._display_name
+    displayName = Property(unicode, _get_display_name, notify=authDataChanged)
+    
+    def _get_my_mri(self):
+        return self._my_mri
+    myMri = Property(unicode, _get_my_mri, notify=authDataChanged)
+    
+    def _get_user_code(self):
+        return self._user_code
+    userCode = Property(unicode, _get_user_code, notify=deviceCodeDataChanged)
+    
+    def _get_verification_url(self):
+        return self._verification_url
+    verificationUrl = Property(unicode, _get_verification_url, notify=deviceCodeDataChanged)
+    
+    def _get_device_code(self):
+        return self._device_code
+    deviceCode = Property(unicode, _get_device_code, notify=deviceCodeDataChanged)
+    
+    def _get_conversations(self):
+        return self._conversations
+    conversations = Property(unicode, _get_conversations, notify=conversationsDataChanged)
+    
+    def _get_messages(self):
+        return self._messages
+    messages = Property(unicode, _get_messages, notify=messagesDataChanged)
+    
+    def _get_current_conv_id(self):
+        return self._current_conv_id
+    currentConvId = Property(unicode, _get_current_conv_id, notify=messagesDataChanged)
+    
+    def _get_search_results(self):
+        return self._search_results
+    searchResults = Property(unicode, _get_search_results, notify=searchDataChanged)
+    
+    def _get_avatar_mri(self):
+        return self._avatar_mri
+    avatarMri = Property(unicode, _get_avatar_mri, notify=avatarDataChanged)
+    
+    def _get_avatar_path(self):
+        return self._avatar_path
+    avatarPath = Property(unicode, _get_avatar_path, notify=avatarDataChanged)
+    
+    def _get_error_message(self):
+        return self._error_message
+    errorMessage = Property(unicode, _get_error_message, notify=errorDataChanged)
+    
+    def _get_created_chat_id(self):
+        return self._created_chat_id
+    createdChatId = Property(unicode, _get_created_chat_id, notify=conversationsDataChanged)
+    
+    def _get_send_success(self):
+        return self._send_success
+    sendSuccess = Property(bool, _get_send_success, notify=messagesDataChanged)
+    
+    def _get_download_path(self):
+        return self._download_path
+    downloadPath = Property(unicode, _get_download_path, notify=downloadDataChanged)
+    
+    def _get_download_success(self):
+        return self._download_success
+    downloadSuccess = Property(bool, _get_download_success, notify=downloadDataChanged)
+    
+    def _get_dir_list(self):
+        return self._dir_list
+    dirList = Property(unicode, _get_dir_list, notify=dirListReady)
+    
+    def _get_dir_path(self):
+        return self._dir_path
+    dirPath = Property(unicode, _get_dir_path, notify=dirListReady)
+    
+    # ==================== Queue System ====================
+    
+    def _call_api(self, command, args=None, callback=None):
+        """Queue an API call."""
+        self._queue.append((command, args or {}, callback))
+        self._process_queue()
+    
+    def _process_queue(self):
+        """Process next item in queue if not busy."""
+        if self._processing or not self._queue:
+            return
+        
+        if self._worker.isRunning():
+            # Check again in 100ms
+            QTimer.singleShot(100, self._process_queue)
+            return
+        
+        self._processing = True
+        command, args, callback = self._queue.popleft()
+        self._pending_callback = callback
+        self._worker.setup(command, args)
+        self._worker.start()
+    
+    def _on_worker_finished(self):
+        """Handle worker completion."""
+        result = self._worker.result
+        
+        if self._pending_callback:
+            try:
+                self._pending_callback(result)
+            except Exception as e:
+                print u"Callback error:", e
+        
+        self._pending_callback = None
+        self._processing = False
+        
+        # Process next in queue
+        QTimer.singleShot(10, self._process_queue)
+    
+    # ==================== Slots ====================
+    
+    @Slot()
+    def checkAuth(self):
+        """Check authentication status."""
+        def on_result(data):
+            self._authenticated = data.get("authenticated", False)
+            self._display_name = data.get("displayName", u"")
+            self._my_mri = data.get("myMri", u"")
+            self.authDataChanged.emit()
+            self.authReady.emit()
+            print u"Auth check complete:", self._authenticated
+        
+        self._call_api("CHECK_AUTH", callback=on_result)
+    
+    @Slot()
+    def startDeviceFlow(self):
+        """Start device code login."""
+        def on_result(data):
+            if "user_code" in data:
+                self._user_code = data.get("user_code", u"")
+                self._verification_url = data.get("verification_url", u"")
+                self._device_code = data.get("device_code", u"")
+                self.deviceCodeDataChanged.emit()
+                self.deviceCodeReady.emit()
+            else:
+                self._error_message = u"Failed to start login"
+                self.errorDataChanged.emit()
+                self.errorOccurred.emit()
+        
+        self._call_api("START_DEVICE_FLOW", callback=on_result)
+    
+    @Slot()
+    def pollToken(self):
+        """Poll for token after user enters code."""
+        def on_result(data):
+            if data.get("success"):
+                self._authenticated = True
+                self._display_name = data.get("displayName", u"")
+                self._my_mri = data.get("myMri", u"")
+                self.authDataChanged.emit()
+                self.loginReady.emit()
+            else:
+                self._error_message = data.get("error", u"Login failed")
+                self.errorDataChanged.emit()
+                self.errorOccurred.emit()
+        
+        self._call_api("POLL_TOKEN", {"device_code": self._device_code}, callback=on_result)
+    
+    @Slot()
+    def logout(self):
+        """Clear authentication."""
+        def on_result(data):
+            self._authenticated = False
+            self._display_name = u""
+            self._my_mri = u""
+            self.authDataChanged.emit()
+            self.authReady.emit()
+        
+        self._call_api("LOGOUT", callback=on_result)
+    
+    @Slot()
+    def loadConversations(self):
+        """Load conversations list."""
+        def on_result(data):
+            if "conversations" in data:
+                self._conversations = json.dumps(data["conversations"])
+            else:
+                self._conversations = u"[]"
+            self.conversationsDataChanged.emit()
+            self.conversationsReady.emit()
+        
+        self._call_api("GET_CONVERSATIONS", callback=on_result)
+    
+    @Slot()
+    def loadCachedConversations(self):
+        """Load conversations from disk cache only (no network)."""
+        def on_result(data):
+            if "conversations" in data and data.get("fromCache"):
+                convs = data["conversations"]
+                if convs:
+                    self._conversations = json.dumps(convs)
+                    self.conversationsDataChanged.emit()
+                    self.conversationsReady.emit()
+                    print u"Loaded", len(convs), u"conversations from cache"
+                else:
+                    # No cache - need to load from network
+                    print u"No cached conversations, loading from network"
+                    self.loadConversations()
+            else:
+                # No cache - need to load from network
+                print u"No cached conversations, loading from network"
+                self.loadConversations()
+        
+        self._call_api("GET_CACHED_CONVERSATIONS", callback=on_result)
+    
+    @Slot(unicode)
+    def loadMessages(self, conv_id):
+        """Load messages for conversation (uses cache if available)."""
+        def on_result(data):
+            if "messages" in data:
+                self._messages = json.dumps(data["messages"])
+            else:
+                self._messages = u"[]"
+            self._current_conv_id = conv_id
+            self.messagesDataChanged.emit()
+            self.messagesReady.emit()
+        
+        self._call_api("GET_MESSAGES", {"conversation_id": str(conv_id)}, callback=on_result)
+    
+    @Slot(unicode)
+    def refreshMessages(self, conv_id):
+        """Refresh messages from network (forces HTTP request)."""
+        def on_result(data):
+            if "messages" in data:
+                self._messages = json.dumps(data["messages"])
+            else:
+                self._messages = u"[]"
+            self._current_conv_id = conv_id
+            self.messagesDataChanged.emit()
+            self.messagesReady.emit()
+        
+        self._call_api("GET_MESSAGES", {"conversation_id": str(conv_id), "refresh": True}, callback=on_result)
+    
+    @Slot(unicode)
+    def loadCachedMessages(self, conv_id):
+        """Load messages from disk cache only (no network)."""
+        def on_result(data):
+            if "messages" in data and data.get("fromCache"):
+                self._messages = json.dumps(data["messages"])
+                self._current_conv_id = conv_id
+                self.messagesDataChanged.emit()
+                self.messagesReady.emit()
+                print u"Loaded", len(data["messages"]), u"cached messages"
+            # If no cache, don't emit - let loadMessages handle it
+        
+        self._call_api("GET_MESSAGES", {"conversation_id": str(conv_id), "cache_only": True}, callback=on_result)
+    
+    @Slot(unicode, unicode)
+    def sendMessage(self, conv_id, content):
+        """Send a message."""
+        def on_result(data):
+            self._send_success = data.get("success", False)
+            self._current_conv_id = conv_id
+            self.messagesDataChanged.emit()
+            self.messageSentReady.emit()
+        
+        self._call_api("SEND_MESSAGE", {
+            "conversation_id": str(conv_id),
+            "content": str(content)
+        }, callback=on_result)
+    
+    @Slot(unicode)
+    def loadAvatar(self, user_mri):
+        """Load user avatar."""
+        def on_result(data):
+            path = data.get("path", u"")
+            if path:
+                self._avatar_mri = user_mri
+                self._avatar_path = path
+                self.avatarDataChanged.emit()
+                self.avatarReady.emit()
+        
+        self._call_api("GET_AVATAR", {"user_mri": str(user_mri)}, callback=on_result)
+    
+    @Slot(unicode)
+    def searchPeople(self, query):
+        """Search for people."""
+        def on_result(data):
+            if "results" in data:
+                self._search_results = json.dumps(data["results"])
+            else:
+                self._search_results = u"[]"
+            self.searchDataChanged.emit()
+            self.searchReady.emit()
+        
+        self._call_api("SEARCH_PEOPLE", {"query": str(query)}, callback=on_result)
+    
+    @Slot(unicode)
+    def createChat(self, user_mri):
+        """Create a new 1:1 chat."""
+        def on_result(data):
+            self._created_chat_id = data.get("conversation_id", u"")
+            self.conversationsDataChanged.emit()
+            self.chatCreated.emit()
+        
+        self._call_api("CREATE_CHAT", {"user_mri": str(user_mri)}, callback=on_result)
+    
+    @Slot(unicode, unicode)
+    def downloadFile(self, url, filename):
+        """Download a file attachment."""
+        def on_result(data):
+            self._download_success = data.get("success", False)
+            self._download_path = data.get("path", u"")
+            self.downloadDataChanged.emit()
+            self.downloadReady.emit()
+            if self._download_success:
+                print u"Downloaded to:", self._download_path
+            else:
+                print u"Download failed:", data.get("error", u"Unknown error")
+        
+        self._call_api("DOWNLOAD_FILE", {
+            "url": str(url),
+            "filename": str(filename)
+        }, callback=on_result)
+    
+    @Slot(unicode, unicode, unicode)
+    def uploadImage(self, conv_id, image_path, message):
+        """Upload an image to a conversation."""
+        def on_result(data):
+            self._download_success = data.get("success", False)
+            self._download_path = data.get("preview_url", u"")
+            self.downloadDataChanged.emit()
+            self.downloadReady.emit()
+            if self._download_success:
+                print u"Image uploaded:", self._download_path
+            else:
+                print u"Upload failed:", data.get("error", u"Unknown error")
+        
+        self._call_api("UPLOAD_IMAGE", {
+            "conversation_id": str(conv_id),
+            "image_path": str(image_path),
+            "message": str(message)
+        }, callback=on_result)
+    
+    @Slot(unicode)
+    def listDir(self, path):
+        """List directory contents for image picker."""
+        def on_result(data):
+            if "items" in data:
+                self._dir_list = json.dumps(data["items"])
+                self._dir_path = data.get("path", u"")
+            else:
+                self._dir_list = u"[]"
+                self._dir_path = path
+            self.dirListReady.emit()
+        
+        self._call_api("LIST_DIR", {
+            "path": str(path),
+            "images_only": True
+        }, callback=on_result)
+
+
+def main():
+    print u"=== Teams 0.9.6 Starting ==="
+    
+    app = QApplication(sys.argv)
+    app.setApplicationName("Teams")
+    
+    api = TeamsAPI()
+    
+    view = QDeclarativeView()
+    view.setWindowTitle("Teams")
+    view.setResizeMode(QDeclarativeView.SizeRootObjectToView)
+    
+    context = view.rootContext()
+    context.setContextProperty("TeamsAPI", api)
+    
+    qml_path = os.path.join(APP_DIR, "qml", "main.qml")
+    view.setSource(QUrl.fromLocalFile(qml_path))
+    
+    if view.status() != QDeclarativeView.Ready:
+        print u"QML Errors:"
+        for error in view.errors():
+            print u" ", error.toString()
+        return 1
+    
+    if os.path.exists('/etc/meego-release'):
+        view.showFullScreen()
+    else:
+        view.resize(480, 854)
+        view.show()
+    
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

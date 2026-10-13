@@ -78,3 +78,49 @@ selbst zusammen (Zeilen 332, 360, 393, 409, 1143). Bei einem privaten Konto
 ist `region` leer, und damit zeigt jeder dieser Aufrufe ins Nichts. Ebenso
 hart: `eu-prod.asyncgw.teams.microsoft.com` (915) und
 `eu-api.asm.skype.com` (1054/1056) — beide gehören aus `regionGtms`.
+
+## Echtzeit: der Langzug ist tot, Trouter lebt (13.10.2026)
+
+Die klassische Endpunkt-Anmeldung, mit der Skype-Clients seit Jahren auf
+Nachrichten warten, ist abgeschaltet — auf **beiden** Rechnern:
+
+```
+POST https://msgapi.teams.live.com/v1/users/ME/endpoints               → 410 Gone
+POST https://teams.live.com/api/chatsvc/consumer/v1/users/ME/endpoints  → 410 Gone
+```
+
+Bleibt Trouter. Der Weg steht, gemessen mit `tools/trouter-probe.py`:
+
+| Stufe | Ergebnis |
+|---|---|
+| `POST go.trouter.skype.com/v4/a?epid=<uuid>`, Kopf `X-Skypetoken` | **200** |
+| → liefert `socketio`, `surl`, `connectparams`, `ccid`, **`registrarUrl`** | |
+| `GET {socketio}/socket.io/1/?v=v4&<connectparams>&tc=…&epid=…&auth=true&timeout=40` | **200**, `<sitzung>:70:70:websocket,xhr-polling` |
+| `POST {registrarUrl}` × 3 (TeamsCDLWebWorker 2.6/TFL, 2.3/"", SkypeSpacesWeb) | **202** |
+| `GET {socketio}/socket.io/1/xhr-polling/{sitzung}?…` | **200**, Rahmen kommen |
+
+Drei Dinge, die man nur durch Messen erfährt:
+
+1. **Die Registraradresse kommt vom Dienst.** purple-teams hat
+   `…/registrar/prod/v2/registrations` eingebaut; geantwortet wird mit
+   **V3**. Immer `registrarUrl` aus der `v4/a`-Antwort nehmen.
+2. **`xhr-polling` wird angeboten.** Damit braucht der Dienst *keinen*
+   WebSocket — der Empfang ist ein `GET`, das Senden ein `POST` auf
+   dieselbe Adresse. Das hält ihn abhängigkeitsfrei.
+3. **Ohne Quittung läuft es im Kreis.** Wer die Rahmen nicht bestätigt,
+   bekommt endlos `trouter.connected` und dann `trouter.message_loss` —
+   nachgemessen, 44 Runden in 75 s, jede nach 0,2 s zurück. Die Ordnung ist:
+
+   * Rahmen `1::` → `user.authenticate` senden (ephemer `3:::{…}`, mit
+     `Authorization: Bearer <id_token>` *in den Rahmenkopfzeilen*, dazu die
+     `connectparams`), dann `user.activity` `active`, dann die
+     Registrierungen.
+   * Rahmen `3:::{…}` ist eine **Anfrage** und will eine Antwort:
+     `3:::{"id":<dieselbe>,"status":200,"body":""}`.
+   * Der Rumpf kann gezippt und base64-kodiert sein
+     (`X-Microsoft-Skype-Content-Encoding: gzip`), ebenso die inneren Felder
+     `cp` und `gp`.
+
+Noch nicht gemessen: ob eine eingehende Nachricht tatsächlich als Ereignis
+ankommt. Der Versuch, in einen verlassenen Faden zu schreiben, endet mit
+`403 AclCheckFailed` — dafür braucht es einen Faden, in dem man noch sitzt.

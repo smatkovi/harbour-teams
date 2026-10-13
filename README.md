@@ -107,3 +107,47 @@ Der Entwurf für Meldungen samt Antworten liegt in
 [`ENTWURF-meldungen.md`](ENTWURF-meldungen.md). Videokonferenz ist kein Ziel:
 die Teams-Anrufsignalisierung ist nirgends veröffentlicht oder nachgebaut, und
 im Browser des Geräts geht es ohnehin.
+
+## Meldungen und Antworten in der Meldung
+
+Dafür gibt es `teamsd.py`, einen eigenen Dienst. Grund: lipstick ruft die
+Antwortmethode auf einem **laufenden** D-Bus-Namen auf, und die App läuft
+nicht, wenn die Meldung erscheint. Ohne bleibenden Prozess gibt es keine
+Antwortzeile.
+
+Einrichten:
+
+```sh
+python3 /usr/share/harbour-teams/teamsd.py --anmelden privat   # einmalig
+systemctl --user enable --now harbour-teams-dienst.service
+journalctl -t teamsd -f        # nicht --user: das Nutzerjournal fehlt hier
+```
+
+Der Dienst meldet sich **selbst** an und führt seine Token in
+`~/.local/share/harbour-teams-dienst/tokens.json` (0600). Er läuft außerhalb
+von Sailjail und kommt an den Schlüsselbund der App nicht heran — und zwei
+Prozesse, die denselben rotierenden Refresh-Token erneuern, melden sich
+gegenseitig ab. Zwei getrennte Ketten sind hier das Einfachere *und* das
+Richtige.
+
+Auf dem Bus:
+
+| | |
+|---|---|
+| `harbour.teams.dienst` `/` `harbour.teams.Dienst` | `Antworten(faden,text)`, `Gelesen(faden)`, `Zustand()` |
+| `harbour-teams.harbour-teams` `/` `harbour.teams.Gui` | `openChat(faden)` — das Antippen der Meldung |
+
+Drei Fallen, alle bezahlt:
+
+* **Die Endpunktkennung muss bleiben.** Mit einer neuen je Sitzung entsteht
+  beim Registrar jedes Mal ein weiterer Eintrag, und der Dienst liefert an
+  einen alten, toten Pfad: nach einem Neustart kam nichts mehr an. Sie
+  liegt deshalb im Token-Lager.
+* **Ereignisse kommen mehrfach** (acht Meldungen für eine Nachricht
+  gemessen) — zwei `TeamsCDLWebWorker`-Registrierungen zeigen auf dieselbe
+  `surl`. `trouter.py` merkt sich die letzten 400 Kennungen.
+* **Ohne `StandardOutput=journal` in der Einheit bleibt das Journal leer.**
+
+Was der Dienst kostet: rund 40 MB. Das ist der Preis dafür, dass er
+denselben geprüften Python-Code benutzt wie die App; eine Fassung in Rust
+käme auf wenige MB, wäre aber ein zweiter Nachbau des ganzen Stapels.

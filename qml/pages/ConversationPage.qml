@@ -20,6 +20,8 @@ Page {
     Component.onCompleted: {
         console.log("ConversationPage opened, conversationId:", conversationId)
         app.loadMessages(conversationId)
+        // Wer das Gespraech aufmacht, hat es gelesen -- Meldung weg.
+        app.gelesen(conversationId)
     }
     
     Connections {

@@ -1,6 +1,6 @@
 Name:       harbour-teams
 Version:    0.1.0
-Release:    76
+Release:    79
 Summary:    Microsoft Teams client for Sailfish OS
 License:    MIT
 Group:      Applications/Communications
@@ -30,6 +30,12 @@ Requires:   pyotherside-qml-plugin-python3-qt5
 Requires:   nemo-qml-plugin-notifications-qt5
 # Sailfish.Pickers: der Dateiwaehler fuer Anhaenge.
 Requires:   sailfish-components-pickers-qt5
+# Der Dienst spricht D-Bus (Meldung setzen, Antwort annehmen) und braucht
+# eine Hauptschleife dafuer.
+Requires:   python3-dbus
+Requires:   python3-gobject
+# Nemo.DBus: die App nimmt den Antippen-Ruf der Meldung entgegen.
+Requires:   nemo-qml-plugin-dbus-qt5
 
 %description
 Unofficial Microsoft Teams client for Sailfish OS.
@@ -55,6 +61,16 @@ install -m 644 %{_sourcedir}/sailfish_secrets.py %{buildroot}%{_datadir}/%{name}
 # Sailfish nicht installiert, und was per pip --user daneben liegt, ist
 # unter Sailjail unsichtbar.
 install -m 644 %{_sourcedir}/netz.py            %{buildroot}%{_datadir}/%{name}/
+# Der Dienst: Trouter hoeren, melden, Antwort aus der Meldung senden.
+install -m 644 %{_sourcedir}/trouter.py         %{buildroot}%{_datadir}/%{name}/
+install -m 644 %{_sourcedir}/meldung.py         %{buildroot}%{_datadir}/%{name}/
+install -m 755 %{_sourcedir}/teamsd.py          %{buildroot}%{_datadir}/%{name}/
+
+# Nutzereinheit. Nicht automatisch eingeschaltet: der Dienst braucht erst
+# eine eigene Anmeldung (teamsd.py --anmelden), und ein Dienst, der ohne
+# Token im Kreis startet, nuetzt niemandem.
+mkdir -p %{buildroot}%{_userunitdir}
+install -m 644 %{_sourcedir}/harbour-teams-dienst.service %{buildroot}%{_userunitdir}/
 
 mkdir -p %{buildroot}%{_datadir}/%{name}/qml/pages %{buildroot}%{_datadir}/%{name}/qml/cover
 install -m 644 %{_sourcedir}/qml/harbour-teams.qml   %{buildroot}%{_datadir}/%{name}/qml/
@@ -83,6 +99,7 @@ done
 %files
 %defattr(-,root,root,-)
 %{_bindir}/%{name}
+%{_userunitdir}/harbour-teams-dienst.service
 %{_datadir}/%{name}
 %{_datadir}/applications/%{name}.desktop
 %{_datadir}/icons/hicolor/*/apps/%{name}.png

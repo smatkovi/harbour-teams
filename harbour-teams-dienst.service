@@ -1,0 +1,25 @@
+[Unit]
+Description=Teams-Dienst: meldet neue Nachrichten und sendet Antworten aus der Meldung
+# Ohne Sitzungsbus kein D-Bus-Name, und ohne den ruft lipstick niemanden.
+Requires=dbus.socket
+After=dbus.socket network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/share/harbour-teams/teamsd.py
+# Der Dienst haelt eine lange Abfrage offen; reisst sie ab, baut er selbst
+# neu auf. Stirbt der Prozess, soll er wiederkommen -- aber nicht im
+# Sekundentakt, sonst heizt ein kaputter Zustand das Telefon.
+Restart=on-failure
+RestartSec=30
+# Er liest ~/.local/share/harbour-teams-dienst/tokens.json (0600) und
+# braucht sonst nichts aus dem Dateisystem.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Ohne das landet nichts im Journal, und die Fehlersuche hat nichts in der
+# Hand -- nachgemessen: "journalctl --user -u ..." blieb leer.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=teamsd
+
+[Install]
+WantedBy=default.target

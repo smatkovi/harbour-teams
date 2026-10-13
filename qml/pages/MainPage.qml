@@ -3,6 +3,7 @@ import Sailfish.Silica 1.0
 
 Page {
     id: mainPage
+    objectName: "MainPage"
     
     property var avatarCache: ({})  // Cache for user avatar paths (keyed by userMri)
     property var convAvatarCache: ({})  // Cache for conversation avatar paths (keyed by convId)

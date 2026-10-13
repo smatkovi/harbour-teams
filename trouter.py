@@ -80,10 +80,15 @@ def _entpacken(text, gezippt):
 class Trouter:
     """Eine Trouter-Sitzung. `lies()` liefert Ereignisse, bis sie abreisst."""
 
-    def __init__(self, auth, melder=print):
+    def __init__(self, auth, melder=print, epid=None):
         self.auth = auth
         self.melde = melder
-        self.epid = str(uuid.uuid4())
+        # Die Endpunktkennung muss **bleiben**. Mit einer neuen je Sitzung
+        # entsteht beim Registrar jedes Mal ein weiterer Eintrag, und der
+        # Dienst liefert dann an einen alten, toten Pfad -- nachgemessen:
+        # nach einem Neustart kam kein Ereignis mehr an. purple-teams haelt
+        # sie darum je Konto fest, nicht je Verbindung.
+        self.epid = epid or str(uuid.uuid4())
         self.zusammenhang = ssl.create_default_context()
         self.socketio = None
         self.surl = None
@@ -93,6 +98,12 @@ class Trouter:
         self.connectparams = {}
         self.herzschlag = 70
         self.angemeldet = False
+        # Dasselbe Ereignis kommt mehrfach: zwei TeamsCDLWebWorker-
+        # Registrierungen zeigen auf dieselbe surl, und was nicht sofort
+        # quittiert ist, schickt der Dienst noch einmal. Acht Meldungen fuer
+        # eine Nachricht nachgemessen. Also merken, was schon durch war.
+        self._gesehen = []
+        self._gesehen_satz = set()
 
     # ------------------------------------------------------------ Netz
 
@@ -258,6 +269,26 @@ class Trouter:
                 return None
         return innen
 
+    def _schon_gehabt(self, ereignis):
+        """True, wenn dieses Ereignis bereits durchgereicht wurde.
+
+        Geschluessel wird nach der Nachrichtenkennung; fehlt die, nach
+        Gespraech und Zeitstempel. Die letzten 400 reichen -- mehr
+        Wiederholungen kommen nicht, und der Speicher ist knapp.
+        """
+        r = ereignis.get("resource") or {}
+        schluessel = (str(ereignis.get("resourceType", "")) + "|"
+                      + str(r.get("id") or r.get("clientmessageid") or "") + "|"
+                      + str(r.get("conversationLink", "")) + "|"
+                      + str(r.get("originalarrivaltime") or r.get("composetime") or ""))
+        if schluessel in self._gesehen_satz:
+            return True
+        self._gesehen.append(schluessel)
+        self._gesehen_satz.add(schluessel)
+        if len(self._gesehen) > 400:
+            self._gesehen_satz.discard(self._gesehen.pop(0))
+        return False
+
     def lies(self, bis=None):
         """Liest, bis die Sitzung abreisst (oder `bis` erreicht ist).
 
@@ -294,7 +325,7 @@ class Trouter:
                     self._senden("3:::" + json.dumps(
                         {"id": nutzlast["id"], "status": 200, "body": ""}))
                     ereignis = self._ereignis(nutzlast)
-                    if ereignis:
+                    if ereignis and not self._schon_gehabt(ereignis):
                         yield ereignis
                 elif typ == "5" and isinstance(nutzlast, dict):
                     name = nutzlast.get("name", "")

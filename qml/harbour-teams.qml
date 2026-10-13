@@ -1,11 +1,58 @@
 import QtQuick 2.6
 import Sailfish.Silica 1.0
+import Nemo.DBus 2.0
 import io.thp.pyotherside 1.5
 import "pages"
 import "cover"
 
 ApplicationWindow {
     id: app
+    
+    // Antippen der Meldung: lipstick ruft diese Methode. Der Name ist der
+    // einzige, den die App unter Sailjail besitzen darf --
+    // <OrganizationName>.<ApplicationName> aus der .desktop-Datei.
+    DBusAdaptor {
+        id: oberflaeche
+        service: "harbour-teams.harbour-teams"
+        path: "/"
+        iface: "harbour.teams.Gui"
+        
+        function openChat(faden) {
+            app.activate()
+            app.gespraechOeffnen(faden)
+        }
+    }
+    
+    // Zum Dienst hin: beim Oeffnen eines Gespraechs die Meldung wegnehmen.
+    DBusInterface {
+        id: dienst
+        service: "harbour.teams.dienst"
+        path: "/"
+        iface: "harbour.teams.Dienst"
+    }
+    
+    function gelesen(faden) {
+        if (faden) {
+            dienst.call("Gelesen", [faden])
+        }
+    }
+    
+    function gespraechOeffnen(faden) {
+        if (!faden) {
+            return
+        }
+        // Erst wenn die App ueberhaupt angemeldet ist, hat eine
+        // Gespraechsseite einen Sinn.
+        if (!authenticated) {
+            return
+        }
+        pageStack.pop(pageStack.find(function(seite) {
+            return seite.objectName === "MainPage"
+        }), PageStackAction.Immediate)
+        pageStack.push(Qt.resolvedUrl("pages/ConversationPage.qml"),
+                       { conversationId: faden })
+        gelesen(faden)
+    }
     
     property bool authenticated: false
     property bool initializing: true

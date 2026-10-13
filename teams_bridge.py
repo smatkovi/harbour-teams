@@ -59,11 +59,17 @@ def is_authenticated():
     return _auth is not None and _auth.is_authenticated()
 
 
-def start_login():
-    """Start the device code login flow. Returns dict with user_code and verification_url."""
+def start_login(modus="arbeit"):
+    """Start the device code login flow. Returns dict with user_code and verification_url.
+    
+    modus: "arbeit" fuer Arbeits- und Schulkonten (wie bisher), "privat" fuer
+    ein privates Microsoft-Konto -- das ist, was aus einem Skype-Konto
+    geworden ist. Die beiden Wege haben keine Station gemeinsam.
+    """
     global _auth
-    if _auth is None:
-        _auth = TeamsAuth()
+    # Immer neu anlegen: ein zuvor geladener Zustand koennte am anderen Tor
+    # haengen, und der Refresh-Token gilt nur fuer sein eigenes.
+    _auth = TeamsAuth(modus)
     
     try:
         result = _auth.start_device_code_flow()
@@ -105,6 +111,18 @@ def poll_login(device_code):
     thread = threading.Thread(target=do_poll)
     thread.daemon = True
     thread.start()
+
+
+def konto_art():
+    """Welcher Weg gerade gilt, und was er kann -- fuer die Oberflaeche."""
+    global _auth
+    if _auth is None:
+        return {"modus": None, "hat_middle_tier": True}
+    return {
+        "modus": _auth.modus,
+        "hat_middle_tier": _auth.hat_middle_tier,
+        "skype_id": _auth.skype_id,
+    }
 
 
 def refresh_tokens():

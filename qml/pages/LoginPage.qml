@@ -52,18 +52,41 @@ Page {
                 color: Theme.highlightColor
                 text: qsTr("Sign in with your Microsoft account to access Teams chats and channels.")
             }
-            
+
             Item {
                 width: parent.width
                 height: Theme.paddingLarge * 2
             }
-            
+
+            // Zwei Tore, keine gemeinsame Station: ein Arbeits- oder
+            // Schulkonto meldet sich bei login.microsoftonline.com/common an
+            // und holt den Skypetoken von teams.microsoft.com, ein privates
+            // Konto (also auch ein Skype-Konto) unter /consumers und von
+            // teams.live.com. Rateversuche kosten nur Zeit, deshalb fragen.
             Button {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: qsTr("Sign In")
+                text: qsTr("Work or school account")
                 onClicked: {
-                    app.startLogin()
+                    app.startLogin('arbeit')
                 }
+            }
+
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("Personal or Skype account")
+                onClicked: {
+                    app.startLogin('privat')
+                }
+            }
+
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.paddingLarge * 2
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                font.pixelSize: Theme.fontSizeExtraSmall
+                color: Theme.secondaryHighlightColor
+                text: qsTr("A personal account has chats, but no teams, channels or profile pictures.")
             }
         }
     }

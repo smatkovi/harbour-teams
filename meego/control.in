@@ -1,5 +1,5 @@
 Package: teams
-Version: @VERSION@
+Version: 0.9.23
 Section: user/network
 Priority: optional
 Architecture: all

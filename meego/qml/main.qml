@@ -339,27 +339,65 @@ PageStackWindow {
                 color: "white"
             }
             
-            // Login button (visible when no code)
+            // Zwei Tore, keine gemeinsame Station: ein Arbeits- oder
+            // Schulkonto meldet sich unter /common an und holt den
+            // Skypetoken von teams.microsoft.com, ein privates Konto (also
+            // auch ein Skype-Konto) unter /consumers und von teams.live.com.
+            // Rateversuche kosten nur Zeit, deshalb fragen.
             Rectangle {
+                id: arbeitKnopf
                 visible: !loginPage.showCode
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: 200; height: 50; radius: 25
+                width: 300; height: 50; radius: 25
                 color: "#464EB8"
-                
+
                 Text {
                     anchors.centerIn: parent
-                    text: "Sign In"
-                    font.pixelSize: 18
+                    text: "Work or school account"
+                    font.pixelSize: 17
                     color: "white"
                 }
-                
+
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
                         loginPage.showCode = true
-                        TeamsAPI.startDeviceFlow()
+                        TeamsAPI.startDeviceFlow("arbeit")
                     }
                 }
+            }
+
+            Rectangle {
+                visible: !loginPage.showCode
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 300; height: 50; radius: 25
+                color: "#464EB8"
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Personal or Skype account"
+                    font.pixelSize: 17
+                    color: "white"
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        loginPage.showCode = true
+                        TeamsAPI.startDeviceFlow("privat")
+                    }
+                }
+            }
+
+            Text {
+                visible: !loginPage.showCode
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - 48
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                font.pixelSize: 14
+                color: "#b0b0b0"
+                text: "A personal account has chats, but no teams, channels or profile pictures."
             }
             
             // Device code display

@@ -107,6 +107,7 @@ class TeamsAPI(QObject):
         self._user_code = u""
         self._verification_url = u""
         self._device_code = u""
+        self._modus = u"arbeit"
         self._conversations = u"[]"
         self._messages = u"[]"
         self._search_results = u"[]"
@@ -262,8 +263,8 @@ class TeamsAPI(QObject):
         
         self._call_api("CHECK_AUTH", callback=on_result)
     
-    @Slot()
-    def startDeviceFlow(self):
+    @Slot(unicode)
+    def startDeviceFlow(self, modus=u"arbeit"):
         """Start device code login."""
         def on_result(data):
             if "user_code" in data:
@@ -277,7 +278,9 @@ class TeamsAPI(QObject):
                 self.errorDataChanged.emit()
                 self.errorOccurred.emit()
         
-        self._call_api("START_DEVICE_FLOW", callback=on_result)
+        self._modus = unicode(modus) if modus else u"arbeit"
+        self._call_api("START_DEVICE_FLOW", {"modus": self._modus},
+                       callback=on_result)
     
     @Slot()
     def pollToken(self):
@@ -294,7 +297,9 @@ class TeamsAPI(QObject):
                 self.errorDataChanged.emit()
                 self.errorOccurred.emit()
         
-        self._call_api("POLL_TOKEN", {"device_code": self._device_code}, callback=on_result)
+        self._call_api("POLL_TOKEN",
+                       {"device_code": self._device_code, "modus": self._modus},
+                       callback=on_result)
     
     @Slot()
     def logout(self):

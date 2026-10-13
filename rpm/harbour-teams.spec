@@ -1,6 +1,6 @@
 Name:       harbour-teams
 Version:    0.1.0
-Release:    73
+Release:    74
 Summary:    Microsoft Teams client for Sailfish OS
 License:    MIT
 Group:      Applications/Communications
@@ -50,6 +50,11 @@ mkdir -p %{buildroot}%{_datadir}/%{name}
 install -m 644 %{_sourcedir}/teams_api.py       %{buildroot}%{_datadir}/%{name}/
 install -m 644 %{_sourcedir}/teams_bridge.py    %{buildroot}%{_datadir}/%{name}/
 install -m 644 %{_sourcedir}/sailfish_secrets.py %{buildroot}%{_datadir}/%{name}/
+# netz.py: der Teil von requests, den teams_api.py braucht, auf urllib.
+# Ohne das startet die App im Sandkasten nicht -- python3-requests ist auf
+# Sailfish nicht installiert, und was per pip --user daneben liegt, ist
+# unter Sailjail unsichtbar.
+install -m 644 %{_sourcedir}/netz.py            %{buildroot}%{_datadir}/%{name}/
 
 mkdir -p %{buildroot}%{_datadir}/%{name}/qml/pages %{buildroot}%{_datadir}/%{name}/qml/cover
 install -m 644 %{_sourcedir}/qml/harbour-teams.qml   %{buildroot}%{_datadir}/%{name}/qml/

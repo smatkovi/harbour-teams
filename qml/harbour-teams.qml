@@ -151,8 +151,8 @@ ApplicationWindow {
     }
     
     // Helper functions
-    function startLogin() {
-        python.call('teams_bridge.start_login', [], function(result) {
+    function startLogin(modus) {
+        python.call('teams_bridge.start_login', [modus || 'arbeit'], function(result) {
             if (result.success) {
                 pageStack.push(Qt.resolvedUrl("pages/DeviceCodePage.qml"), {
                     userCode: result.user_code,

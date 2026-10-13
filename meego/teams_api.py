@@ -40,6 +40,40 @@ CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 RESOURCE = "https://api.spaces.skype.com"
 AUTHORITY = "https://login.microsoftonline.com/common"
 
+# Zwei Anmeldewege, die keine Station gemeinsam haben. "arbeit" ist, was die
+# App immer gemacht hat -- die Zeichenketten darin sind Zeichen fuer Zeichen
+# die alten, denn dieser Weg ist ohne Arbeitskonto nicht mehr pruefbar.
+# "privat" gilt fuer ein privates Microsoft-Konto, also auch fuer ein
+# Skype-Konto. Gemessen am 13.10.2026, siehe ../BEFUND-privatkonto.md.
+MODI = {
+    "arbeit": {
+        "client_id": CLIENT_ID,
+        "devicecode": AUTHORITY + "/oauth2/devicecode",
+        "token": AUTHORITY + "/oauth2/token",
+        # AAD v1 nimmt resource=, v2.0 will scope= -- nicht austauschbar.
+        "bereich": ("resource", RESOURCE),
+        "codefeld": "code",
+        "authz": "https://teams.microsoft.com/api/authsvc/v1.0/authz",
+        "mt": True,
+    },
+    "privat": {
+        "client_id": "8ec6bc83-69c8-4392-8f08-b3c986009232",
+        "devicecode": "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode",
+        "token": "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+        # /.default wird mit AADSTS70011 abgewiesen; es muss der
+        # MBI_SSL-Dienstname sein.
+        "bereich": ("scope", "service::api.fl.spaces.skype.com::MBI_SSL"
+                             " openid profile offline_access"),
+        "codefeld": "device_code",
+        "authz": "https://teams.live.com/api/auth/v1.0/authz/consumer",
+        # Jeder middleTier-Weg gibt 401, auch mit eigens geholtem Token.
+        "mt": False,
+    },
+}
+
+AMS_ARBEIT = "https://eu-api.asm.skype.com"
+ASYNCGW_ARBEIT = "https://eu-prod.asyncgw.teams.microsoft.com"
+
 
 def ensure_dirs():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -109,29 +143,98 @@ def http_request(url, method="GET", headers=None, data=None, timeout=45):
         return {"error": True, "message": str(e)}
 
 
+_KONTAKTE = {}
+
+
+def kontakte_holen(auth, erneuern=False):
+    """Die Kontaktliste -- bei privaten Konten der Ersatz fuer middleTier.
+
+    Dort gibt jeder middleTier-Weg 401, auch mit einem eigens dafuer
+    geholten Token. contacts.skype.com antwortet dagegen auf den Skypetoken
+    und liefert Kennung und Anzeigename.
+
+    Rueckgabe: {mri: Anzeigename}. Einmal geholt und behalten -- eine
+    Kontaktliste aendert sich nicht im Minutentakt, und auf diesem Geraet
+    ist jede vermiedene Abfrage ein Gewinn.
+    """
+    global _KONTAKTE
+    if _KONTAKTE and not erneuern:
+        return _KONTAKTE
+    if not auth.skype_token:
+        return {}
+    gefunden = {}
+    try:
+        ergebnis = http_request(
+            "https://contacts.skype.com/contacts/v2/users/SELF/contacts",
+            headers={"X-Skypetoken": auth.skype_token, "Accept": "application/json"},
+        )
+        for k in (ergebnis or {}).get("contacts", []) or []:
+            mri = k.get("mri") or k.get("person_id")
+            name = k.get("display_name") or (k.get("name") or {}).get("first")
+            if mri and name:
+                gefunden[mri] = name
+    except Exception as e:
+        print(f"kontakte_holen: {e}", file=sys.stderr)
+    if gefunden:
+        _KONTAKTE = gefunden
+    return gefunden
+
+
 class TeamsAuth:
     """Handles Teams authentication via device code flow."""
     
-    def __init__(self):
+    def __init__(self, modus="arbeit"):
+        self.modus = modus if modus in MODI else "arbeit"
         self.access_token = None
         self.refresh_token = None
         self.skype_token = None
         self.region = "emea"
         self.chat_service = None
         self.middle_tier = None
+        self.chatsvc_base = None
+        self.ams_base = None
+        self.asyncgw_base = None
+        self.skype_id = None
         self.my_mri = None
         self.display_name = None
     
+    @property
+    def weg(self):
+        return MODI[self.modus]
+    
+    @property
+    def hat_middle_tier(self):
+        """Ob Profile, Bilder, Teams und Suche offenstehen."""
+        return self.weg["mt"]
+    
+    def _wege_setzen(self, region_gtms):
+        """Die drei Grundadressen. Im Arbeitsmodus genau die alten."""
+        if self.modus == "privat":
+            self.chatsvc_base = (region_gtms.get("chatServiceAfd")
+                                 or "https://teams.live.com/api/chatsvc/consumer")
+            self.ams_base = region_gtms.get("ams") or "https://us-api.asm.skype.com"
+            self.asyncgw_base = "https://us-prod.asyncgw.teams.microsoft.com"
+        else:
+            self.chatsvc_base = "https://teams.microsoft.com/api/chatsvc/%s" % self.region
+            self.ams_base = AMS_ARBEIT
+            self.asyncgw_base = ASYNCGW_ARBEIT
+    
     def start_device_code_flow(self):
         """Start device code flow. Returns dict with user_code and verification_url."""
+        weg = self.weg
+        schluessel, wert = weg["bereich"]
         result = http_request(
-            f"{AUTHORITY}/oauth2/devicecode",
+            weg["devicecode"],
             method="POST",
             data={
-                "client_id": CLIENT_ID,
-                "resource": RESOURCE,
+                "client_id": weg["client_id"],
+                schluessel: wert,
             }
         )
+        # v1 nennt es verification_url, v2.0 verification_uri.
+        if isinstance(result, dict) and "verification_url" not in result \
+                and "verification_uri" in result:
+            result["verification_url"] = result["verification_uri"]
         return result
     
     def poll_for_token(self, device_code, interval=5, timeout=900):
@@ -141,13 +244,14 @@ class TeamsAuth:
         while time.time() - start_time < timeout:
             time.sleep(interval)
             
+            weg = self.weg
             result = http_request(
-                f"{AUTHORITY}/oauth2/token",
+                weg["token"],
                 method="POST",
                 data={
-                    "client_id": CLIENT_ID,
+                    "client_id": weg["client_id"],
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    "code": device_code,
+                    weg["codefeld"]: device_code,
                 }
             )
             
@@ -172,14 +276,16 @@ class TeamsAuth:
         if not self.refresh_token:
             return False
         
+        weg = self.weg
+        schluessel, wert = weg["bereich"]
         result = http_request(
-            f"{AUTHORITY}/oauth2/token",
+            weg["token"],
             method="POST",
             data={
-                "client_id": CLIENT_ID,
+                "client_id": weg["client_id"],
                 "grant_type": "refresh_token",
                 "refresh_token": self.refresh_token,
-                "resource": RESOURCE,
+                schluessel: wert,
             }
         )
         
@@ -196,24 +302,30 @@ class TeamsAuth:
             return False
         
         result = http_request(
-            "https://teams.microsoft.com/api/authsvc/v1.0/authz",
+            self.weg["authz"],
             method="POST",
             headers={
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
+                # Ohne das antwortet der private Weg mit 40110.
+                "Accept": "application/json; ver=1.0",
             }
         )
         
         if result.get("error"):
             return False
         
-        tokens = result.get("tokens", {})
-        self.skype_token = tokens.get("skypeToken")
+        # Arbeit legt den Token unter "tokens" ab, privat unter "skypeToken"
+        # -- und dort heisst das Feld klein.
+        tokens = result.get("tokens") or result.get("skypeToken") or {}
+        self.skype_token = tokens.get("skypeToken") or tokens.get("skypetoken")
+        self.skype_id = tokens.get("skypeid")
         self.region = result.get("region", "emea")
         
         region_gtms = result.get("regionGtms", {})
         self.chat_service = region_gtms.get("chatService", f"https://{self.region}.ng.msg.teams.microsoft.com")
         self.middle_tier = region_gtms.get("middleTier", f"https://teams.microsoft.com/api/mt/{self.region}")
+        self._wege_setzen(region_gtms)
         
         # Extract my MRI from skype token
         self._extract_my_mri()
@@ -251,6 +363,12 @@ class TeamsAuth:
             "region": self.region,
             "chat_service": self.chat_service,
             "middle_tier": self.middle_tier,
+            # Ohne den Modus klopft die Erneuerung am falschen Tor.
+            "modus": self.modus,
+            "chatsvc_base": self.chatsvc_base,
+            "ams_base": self.ams_base,
+            "asyncgw_base": self.asyncgw_base,
+            "skype_id": self.skype_id,
             "my_mri": self.my_mri,
             "display_name": self.display_name,
         }
@@ -270,6 +388,16 @@ class TeamsAuth:
             self.region = tokens.get("region", "emea")
             self.chat_service = tokens.get("chat_service")
             self.middle_tier = tokens.get("middle_tier")
+            # Aelteres Lager kennt den Modus nicht; das war immer "arbeit".
+            gespeichert = tokens.get("modus")
+            if gespeichert in MODI:
+                self.modus = gespeichert
+            self.skype_id = tokens.get("skype_id")
+            self.chatsvc_base = tokens.get("chatsvc_base")
+            self.ams_base = tokens.get("ams_base")
+            self.asyncgw_base = tokens.get("asyncgw_base")
+            if not self.chatsvc_base:
+                self._wege_setzen({})
             self.my_mri = tokens.get("my_mri")
             self.display_name = tokens.get("display_name", "Teams User")
             return self.skype_token is not None
@@ -331,7 +459,7 @@ class TeamsClient:
     def get_conversations(self, page_size=50):
         """Get list of conversations (chats)."""
         # Use proxy URL like SFOS does
-        base_url = f"https://teams.microsoft.com/api/chatsvc/{self.auth.region}/v1/users/ME/conversations"
+        base_url = f"{self.auth.chatsvc_base}/v1/users/ME/conversations"
         
         # Build query string - view parameter needs proper encoding
         view_param = urllib.parse.quote("msnp24Equivalent|supportsMessageProperties", safe='')
@@ -362,7 +490,7 @@ class TeamsClient:
             start_time: Unix timestamp in milliseconds - only get messages after this time
         """
         encoded_id = urllib.parse.quote(conversation_id, safe='')
-        base_url = f"https://teams.microsoft.com/api/chatsvc/{self.auth.region}/v1/users/ME/conversations/{encoded_id}/messages"
+        base_url = f"{self.auth.chatsvc_base}/v1/users/ME/conversations/{encoded_id}/messages"
         
         view_param = urllib.parse.quote("msnp24Equivalent|supportsMessageProperties", safe='')
         full_url = f"{base_url}?startTime={start_time}&pageSize={page_size}&view={view_param}"
@@ -395,7 +523,7 @@ class TeamsClient:
             }
         }
         
-        url = f"https://teams.microsoft.com/api/chatsvc/{self.auth.region}/v1/users/ME/conversations/{encoded_id}/messages"
+        url = f"{self.auth.chatsvc_base}/v1/users/ME/conversations/{encoded_id}/messages"
         
         result = http_request(
             url,
@@ -422,6 +550,10 @@ class TeamsClient:
         # Fetch from API (not cached yet)
         print(f"Fetching new avatar: {user_mri[:30]}...", file=sys.stderr)
         try:
+            if not self.auth.hat_middle_tier:
+                # Profilbilder haengen am middleTier, und das ist fuer private
+                # Konten zu. Lieber kein Bild als ein 401 bei jedem Namen.
+                return None
             url = f"{self.auth.middle_tier}/beta/users/{urllib.parse.quote(user_mri, safe='')}/profilepicturev2?size={size}"
             
             req = urllib.request.Request(url, headers=self._mt_headers())
@@ -452,6 +584,15 @@ class TeamsClient:
         query = query.strip()
         if not query:
             return []
+        
+        if not self.auth.hat_middle_tier:
+            # Ein Verzeichnis zum Durchsuchen hat ein privates Konto nicht.
+            # Was es hat, sind seine Kontakte.
+            gesucht = query.lower()
+            return [{"displayName": name, "mri": mri, "email": "",
+                     "userPrincipalName": ""}
+                    for mri, name in kontakte_holen(self.auth).items()
+                    if gesucht in name.lower()]
         
         try:
             # First try Graph API (more reliable)
@@ -629,7 +770,11 @@ class TeamsClient:
 
 def handle_command(cmd, args):
     """Handle a command from the Python 2 launcher."""
-    auth = TeamsAuth()
+    # Der Modus muss mitkommen: fuer jedes Kommando wird hier ein frischer
+    # TeamsAuth gebaut, und beim Abholen des Tokens entscheidet er, an
+    # welchem Tor geklopft wird. Beim Anmelden gibt ihn der Starter mit,
+    # danach steht er im Token-Lager.
+    auth = TeamsAuth(args.get("modus", "arbeit"))
     
     if cmd == "CHECK_AUTH":
         if auth.load_tokens():
@@ -847,6 +992,17 @@ def handle_command(cmd, args):
         # Find which MRIs we still need to fetch
         mris_to_fetch = [m for m in user_mris_to_fetch if m not in user_cache]
         
+        if mris_to_fetch and not auth.hat_middle_tier:
+            # Privat ist fetchShortProfile zu; die Namen stehen in den
+            # Kontakten. Wer dort nicht steht, bleibt ohne Namen -- das ist
+            # kein Fehler, sondern das, was das Konto hergibt.
+            namen = kontakte_holen(auth)
+            for mri in mris_to_fetch:
+                if mri in namen:
+                    user_cache[mri] = namen[mri]
+                    profiles_changed = True
+            mris_to_fetch = []
+
         if mris_to_fetch:
             print(f"Fetching {len(mris_to_fetch)} new user profiles (cached: {len(user_cache)})...", file=sys.stderr)
             try:
@@ -1293,7 +1449,7 @@ def handle_command(cmd, args):
         teams_type = "pish/image" if mime_type.startswith("image/") else "pish/file"
         
         # AsyncGW base URL
-        asyncgw_base = "https://eu-prod.asyncgw.teams.microsoft.com"
+        asyncgw_base = self.auth.asyncgw_base or ASYNCGW_ARBEIT
         
         # Generate session and request IDs
         session_id = str(uuid.uuid4())
@@ -1408,14 +1564,14 @@ def handle_command(cmd, args):
             
             # Step 4: Send message with attachment
             if teams_type == "pish/image":
-                preview_url = f"https://eu-api.asm.skype.com/v1/objects/{object_id}/views/imgo"
+                preview_url = f"{self.auth.ams_base}/v1/objects/{object_id}/views/imgo"
                 img_tag = f'<img alt="{filename}" src="{preview_url}" itemscope="http://schema.skype.com/AMSImage" style="vertical-align:bottom;width:250px;height:auto"></img>'
                 if message_text:
                     message_content = f"{message_text}<p>{img_tag}</p>"
                 else:
                     message_content = img_tag
             else:
-                preview_url = f"https://eu-api.asm.skype.com/v1/objects/{object_id}/views/original"
+                preview_url = f"{self.auth.ams_base}/v1/objects/{object_id}/views/original"
                 file_tag = f'<a href="{preview_url}">{filename}</a>'
                 if message_text:
                     message_content = f"{message_text}<p>{file_tag}</p>"
@@ -1451,7 +1607,7 @@ def handle_command(cmd, args):
                 }
             }).encode('utf-8')
             
-            msg_url = f"https://teams.microsoft.com/api/chatsvc/{auth.region}/v1/users/ME/conversations/{encoded_id}/messages"
+            msg_url = f"{auth.chatsvc_base}/v1/users/ME/conversations/{encoded_id}/messages"
             
             result = http_request(
                 msg_url,

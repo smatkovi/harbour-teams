@@ -8,6 +8,8 @@ import pyotherside
 from teams_api import TeamsAuth, TeamsClient, TeamsDataManager
 import threading
 import json
+import time
+from pathlib import Path
 
 # Global instances
 _auth = None
@@ -35,6 +37,7 @@ def init():
                 _auth.save_tokens()
                 _data_manager = TeamsDataManager(_auth)
                 print("DataManager created with fresh tokens")
+                zustand_schreiben(_auth, "init: frisch erneuert")
                 pyotherside.send('authStateChanged', True)
                 return True
             else:
@@ -43,12 +46,17 @@ def init():
             print("Failed to refresh access token")
         
         # If refresh failed, try using existing tokens anyway
+        # Hier war die App bisher still: Erneuern *oder* authz ist
+        # gescheitert, und trotzdem sagte sie "angemeldet". Genau das sieht
+        # dann aus wie ein leeres Konto -- keine Liste, keine Kontakte.
         print("Trying with existing tokens...")
+        zustand_schreiben(_auth, "init: Erneuern/authz GESCHEITERT, nehme alte Token")
         _data_manager = TeamsDataManager(_auth)
         pyotherside.send('authStateChanged', True)
         return True
     
     print("No tokens loaded")
+    zustand_schreiben(_auth, "init: kein Token geladen")
     pyotherside.send('authStateChanged', False)
     return False
 
@@ -100,6 +108,7 @@ def poll_login(device_code):
                 if _auth.get_teams_authorization():
                     _auth.save_tokens()
                     _data_manager = TeamsDataManager(_auth)
+                    zustand_schreiben(_auth, "anmelden: durch")
                     pyotherside.send('loginComplete', True, '')
                 else:
                     pyotherside.send('loginComplete', False, 'Failed to get Teams authorization')
@@ -111,6 +120,43 @@ def poll_login(device_code):
     thread = threading.Thread(target=do_poll)
     thread.daemon = True
     thread.start()
+
+
+def zustand_schreiben(auth, wo=""):
+    """Schreibt den Anmeldezustand in eine Datei im eigenen Sandkasten.
+
+    Warum eine Datei und nicht ein print: das Journal auf dem Geraet rotiert
+    im Minutentakt, und was die App beim Start sagt, ist dann schon weg,
+    bevor man nachsehen kann. Token stehen hier *nicht* drin -- nur, ob es
+    sie gibt.
+    """
+    try:
+        ordner = Path.home() / ".local" / "share" / "harbour-teams" / "harbour-teams"
+        ordner.mkdir(parents=True, exist_ok=True)
+        import teams_api
+        zeilen = [
+            f"stelle:          {wo}",
+            f"zeit:            {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"HTTP-Schicht:    {teams_api.requests.__name__}",
+            f"Secrets da:      {teams_api.HAS_SECRETS}",
+        ]
+        if auth is None:
+            zeilen.append("auth:            keiner")
+        else:
+            zeilen += [
+                f"modus:           {auth.modus}",
+                f"middleTier:      {auth.hat_middle_tier}",
+                f"access_token:    {'ja' if auth.access_token else 'NEIN'}",
+                f"refresh_token:   {'ja' if auth.refresh_token else 'NEIN'}",
+                f"skype_token:     {'ja' if auth.skype_token else 'NEIN'}",
+                f"skype_id:        {auth.skype_id}",
+                f"region:          {auth.region}",
+                f"chatsvc_base:    {auth.chatsvc_base}",
+                f"ams_base:        {auth.ams_base}",
+            ]
+        (ordner / "zustand.txt").write_text("\n".join(zeilen) + "\n")
+    except Exception as e:
+        print(f"zustand_schreiben: {e}")
 
 
 def konto_art():

@@ -1,6 +1,6 @@
 Name:       harbour-teams
 Version:    0.1.0
-Release:    74
+Release:    76
 Summary:    Microsoft Teams client for Sailfish OS
 License:    MIT
 Group:      Applications/Communications

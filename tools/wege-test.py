@@ -14,6 +14,7 @@ die private ist am 13.10.2026 gemessen (BEFUND-privatkonto.md), die
 geschaeftliche ist die, auf die der alte Code gebaut hat.
 """
 
+import base64
 import json
 import os
 import sys
@@ -26,10 +27,11 @@ from teams_api import TeamsAuth
 # ---------------------------------------------------------------- Attrappe
 
 class Antwort:
-    def __init__(self, nutzlast, status=200):
+    def __init__(self, nutzlast, status=200, kopfzeilen=None):
         self.status_code = status
         self._nutzlast = nutzlast
         self.text = json.dumps(nutzlast)
+        self.headers = kopfzeilen or {}
 
     def json(self):
         return self._nutzlast
@@ -187,6 +189,52 @@ auth3._wege_setzen({})
 gleich("chatsvc-Basis aus dem Nichts abgeleitet", auth3.chatsvc_base,
        "https://teams.microsoft.com/api/chatsvc/emea")
 gleich("AMS", auth3.ams_base, "https://eu-api.asm.skype.com")
+
+# --------------------------------- Neues Gespraech: Kennung aus dem Kopf
+
+print("\nNeues Gespraech -- die Kennung sagt der Dienst, sie wird nicht geraten:")
+
+
+class NetzMitKopf:
+    """Antwortet wie der Dienst beim Anlegen eines Fadens: 201, leerer
+    Rumpf, die Kennung im location-Kopf. Gemessen am 13.10.2026."""
+
+    def __init__(self, ort):
+        self.ort = ort
+
+    def post(self, url, **k):
+        kopf = {"location": self.ort} if self.ort else {}
+        return Antwort({}, 201, kopf)
+
+
+def gespraech_anlegen(modus, ort):
+    echt = teams_api.requests
+    teams_api.requests = NetzMitKopf(ort)
+    try:
+        auth = TeamsAuth(modus)
+        # Ein Skypetoken, aus dem sich die eigene Kennung lesen laesst.
+        nutz = base64.urlsafe_b64encode(
+            json.dumps({"skypeid": "ich"}).encode()).decode().rstrip("=")
+        auth.skype_token = "kopf." + nutz + ".unterschrift"
+        auth.region = "emea"
+        auth._wege_setzen({})
+        return teams_api.TeamsClient(auth).create_chat("8:du")
+    finally:
+        teams_api.requests = echt
+
+
+gleich("privat: Kennung aus location",
+       gespraech_anlegen("privat",
+                         "https://msgapi.teams.live.com/v1/threads/19:abc123@thread.v2"),
+       "19:abc123@thread.v2")
+gleich("privat: ohne location lieber nichts als geraten",
+       gespraech_anlegen("privat", None), None)
+gleich("arbeit: location gilt auch dort",
+       gespraech_anlegen("arbeit",
+                         "https://emea.ng.msg.teams.microsoft.com/v1/threads/19:xyz@thread.v2"),
+       "19:xyz@thread.v2")
+gleich("arbeit: ohne location wie bisher geraten",
+       gespraech_anlegen("arbeit", None), "19:du_ich@unq.gbl.spaces")
 
 # ------------------------------------------------------------------ Ergebnis
 

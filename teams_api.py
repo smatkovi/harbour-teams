@@ -16,7 +16,7 @@ except ImportError:
 import base64
 import hashlib
 import os
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from pathlib import Path
 
 # Import Sailfish Secrets once at module level (like WebUntis does)
@@ -699,6 +699,26 @@ class TeamsClient:
             response = requests.post(url, headers=headers, json=payload)
             print(f"create_chat response: {response.status_code}")
             if response.status_code in [200, 201]:
+                # Der Dienst *sagt*, wie der Faden heisst: der Rumpf ist leer,
+                # die Kennung steht im location-Kopf. Vorher wurde sie geraten
+                # (19:{uuid}_{uuid}@unq.gbl.spaces) -- bei einem privaten Konto
+                # heisst sie 19:<hex>@thread.v2, und die App sprang danach in
+                # ein Gespraech, das es nicht gibt. Gemessen: HTTP 201, leerer
+                # Rumpf, location: .../v1/threads/19:...@thread.v2
+                ort = (response.headers or {}).get("location") or ""
+                aus_kopf = ort.rstrip("/").rsplit("/", 1)[-1] if ort else ""
+                if aus_kopf.startswith("19:"):
+                    conv_id = unquote(aus_kopf)
+                    print(f"Created chat (aus location): {conv_id}")
+                    return conv_id
+                if not self.auth.hat_middle_tier:
+                    # Privat gibt es nichts zu raten: ohne location wissen wir
+                    # die Kennung nicht, und ein geratener Sprung endet im
+                    # Leeren. Lieber ehrlich nichts zurueckgeben.
+                    print("create_chat: kein location-Kopf, Kennung unbekannt")
+                    return None
+                # Arbeitsmodus unveraendert: dort hat das Raten getragen, und
+                # ohne Arbeitskonto kann ich eine Umstellung nicht pruefen.
                 my_uuid = my_mri.split(":")[-1]
                 other_uuid = user_mri.split(":")[-1]
                 if my_uuid < other_uuid:

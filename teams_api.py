@@ -98,6 +98,8 @@ class TeamsAuth:
         self.ams_base = None
         self.asyncgw_base = None
         self.skype_id = None
+        # Trouter will im Anmelderahmen ein id_token, nicht das access_token.
+        self.id_token = None
         self.user_id = None
         self.user_name = None
 
@@ -152,6 +154,7 @@ class TeamsAuth:
             if "access_token" in result:
                 self.access_token = result["access_token"]
                 self.refresh_token = result.get("refresh_token")
+                self.id_token = result.get("id_token") or self.id_token
                 return True
             
             error = result.get("error")
@@ -187,6 +190,8 @@ class TeamsAuth:
             self.access_token = result["access_token"]
             if "refresh_token" in result:
                 self.refresh_token = result["refresh_token"]
+            if "id_token" in result:
+                self.id_token = result["id_token"]
             return True
         return False
     
